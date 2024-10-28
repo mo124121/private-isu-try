@@ -104,6 +104,7 @@ func dbInitialize() error {
 		"CREATE INDEX iser_id_idx ON posts (user_id);",
 		"CREATE INDEX created_at_idx ON posts (created_at DESC);",
 		"CREATE INDEX account_name_idx ON users (account_name);",
+		"CREATE INDEX del_flg_id_idx ON users (del_flg, id);",
 	}
 	for _, sql := range indexsqls {
 		if err := isuutil.CreateIndexIfNotExists(db, sql); err != nil {
