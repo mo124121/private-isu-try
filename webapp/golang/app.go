@@ -18,6 +18,7 @@ import (
 
 	"github.com/bradfitz/gomemcache/memcache"
 	gsm "github.com/bradleypeabody/gorilla-sessions-memcache"
+	"github.com/catatsuy/private-isu/webapp/golang/isuutil"
 	"github.com/go-chi/chi/v5"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
@@ -77,7 +78,7 @@ func init() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 }
 
-func dbInitialize() {
+func dbInitialize() error {
 	sqls := []string{
 		"DELETE FROM users WHERE id > 1000",
 		"DELETE FROM posts WHERE id > 10000",
@@ -89,6 +90,21 @@ func dbInitialize() {
 	for _, sql := range sqls {
 		db.Exec(sql)
 	}
+
+	indexsqls := []string{
+		"CREATE INDEX post_id_created_at_idx ON comments (post_id, created_at);",
+		"CREATE INDEX post_id_idx ON comments (post_id);",
+		"CREATE INDEX user_id_idx ON comments (user_id);",
+		"CREATE INDEX iser_id_idx ON posts (user_id);",
+		"CREATE INDEX created_at_idx ON posts (created_at);",
+		"CREATE INDEX account_name_idx ON users (account_name);",
+	}
+	for _, sql := range indexsqls {
+		if err := isuutil.CreateIndexIfNotExists(db, sql); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func tryLogin(accountName, password string) *User {
@@ -262,7 +278,12 @@ func getTemplPath(filename string) string {
 }
 
 func getInitialize(w http.ResponseWriter, r *http.Request) {
-	dbInitialize()
+	err := dbInitialize()
+	if err != nil {
+		fmt.Println(err)
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+
 	go func() {
 		if _, err := http.Get("http://isucon-o11y:9000/api/group/collect"); err != nil {
 			log.Printf("failed to communicate with pprotein: %v", err)
