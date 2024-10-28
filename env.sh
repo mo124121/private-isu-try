@@ -1,0 +1,3 @@
+ISUCONP_DB_USER=isuconp
+ISUCONP_DB_PASSWORD=isuconp
+ISUCONP_DB_NAME=isuconp

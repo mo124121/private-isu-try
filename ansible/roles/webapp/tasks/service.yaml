@@ -1,0 +1,12 @@
+- name: Stop Ruby
+  become: true
+  ansible.builtin.systemd:
+    name: isu-ruby
+    state: stopped
+    enabled: false
+# - name: Start Go
+#   become: true
+#   ansible.builtin.systemd:
+#     name: isu-go
+#     state: started
+#     enabled: true
