@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bradfitz/gomemcache/memcache"
@@ -27,8 +28,10 @@ import (
 )
 
 var (
-	db    *sqlx.DB
-	store *gsm.MemcacheStore
+	db        *sqlx.DB
+	store     *gsm.MemcacheStore
+	userCache = sync.Map{}
+	cacheLock = sync.Mutex{}
 )
 
 const (
@@ -160,6 +163,22 @@ func getSession(r *http.Request) *sessions.Session {
 	return session
 }
 
+func getUser(uid int) (User, error) {
+	user, ok := userCache.Load(uid)
+	if ok {
+		return user.(User), nil
+	}
+	u := User{}
+	err := db.Get(&u, "SELECT * FROM `users` WHERE `id` = ?", uid)
+	if err != nil {
+		return User{}, err
+	}
+
+	userCache.Store(uid, u)
+	return u, nil
+
+}
+
 func getSessionUser(r *http.Request) User {
 	session := getSession(r)
 	uid, ok := session.Values["user_id"]
@@ -223,7 +242,7 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 
 		p.Comments = comments
 
-		err = db.Get(&p.User, "SELECT * FROM `users` WHERE `id` = ?", p.UserID)
+		p.User, err = getUser(p.UserID)
 		if err != nil {
 			return nil, err
 		}
@@ -288,6 +307,10 @@ func getInitialize(w http.ResponseWriter, r *http.Request) {
 
 	os.RemoveAll(imageDir)
 	os.Mkdir(imageDir, 0755)
+
+	cacheLock.Lock()
+	userCache = sync.Map{}
+	cacheLock.Unlock()
 
 	go func() {
 		if _, err := http.Get("http://isucon-o11y:9000/api/group/collect"); err != nil {
@@ -820,6 +843,7 @@ func postAdminBanned(w http.ResponseWriter, r *http.Request) {
 
 	for _, id := range r.Form["uid[]"] {
 		db.Exec(query, 1, id)
+		userCache.Delete(id)
 	}
 
 	http.Redirect(w, r, "/admin/banned", http.StatusFound)
