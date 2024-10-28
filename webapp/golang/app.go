@@ -92,11 +92,12 @@ func dbInitialize() error {
 	}
 
 	indexsqls := []string{
-		"CREATE INDEX post_id_created_at_idx ON comments (post_id, created_at);",
+		"CREATE INDEX post_id_created_at_idx ON comments (post_id, created_at DESC);",
+		"CREATE INDEX created_at_idx ON comments (created_at DESC);",
 		"CREATE INDEX post_id_idx ON comments (post_id);",
 		"CREATE INDEX user_id_idx ON comments (user_id);",
 		"CREATE INDEX iser_id_idx ON posts (user_id);",
-		"CREATE INDEX created_at_idx ON posts (created_at);",
+		"CREATE INDEX created_at_idx ON posts (created_at DESC);",
 		"CREATE INDEX account_name_idx ON users (account_name);",
 	}
 	for _, sql := range indexsqls {

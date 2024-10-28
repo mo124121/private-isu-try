@@ -1,0 +1,6 @@
+- name: Setup nginx
+  hosts: nginx
+  tasks:
+    - name: Nginx
+      ansible.builtin.import_role:
+        name: nginx
