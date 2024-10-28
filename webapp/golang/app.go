@@ -35,6 +35,7 @@ const (
 	postsPerPage  = 20
 	ISO8601Format = "2006-01-02T15:04:05-07:00"
 	UploadLimit   = 10 * 1024 * 1024 // 10mb
+	imageDir      = "../public/image"
 )
 
 type User struct {
@@ -284,6 +285,9 @@ func getInitialize(w http.ResponseWriter, r *http.Request) {
 		fmt.Println(err)
 		w.WriteHeader(http.StatusInternalServerError)
 	}
+
+	os.RemoveAll(imageDir)
+	os.Mkdir(imageDir, 0755)
 
 	go func() {
 		if _, err := http.Get("http://isucon-o11y:9000/api/group/collect"); err != nil {
@@ -724,6 +728,8 @@ func getImage(w http.ResponseWriter, r *http.Request) {
 			log.Print(err)
 			return
 		}
+		imagePath := fmt.Sprintf("%s/%d.%s", imageDir, pid, ext)
+		os.WriteFile(imagePath, post.Imgdata, 0755)
 		return
 	}
 
