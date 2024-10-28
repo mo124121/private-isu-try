@@ -1,0 +1,14 @@
+all:
+  children:
+    target:
+      hosts:
+        nginx:
+          ansible_host: "isucon-server1"
+        webapp:
+          ansible_host: "isucon-server1"
+        db:
+          ansible_host: "isucon-server1"
+    outsider:
+      hosts:
+        benchmarker:
+          ansible_host: "isucon-server2"

@@ -1,0 +1,7 @@
+- name: Setup service
+  hosts: webapp
+  tasks:
+    - name: Service
+      ansible.builtin.import_role:
+        name: webapp
+        tasks_from: service
