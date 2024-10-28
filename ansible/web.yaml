@@ -5,3 +5,19 @@
       ansible.builtin.import_role:
         name: webapp
         tasks_from: service
+
+- name: Build local
+  hosts: localhost
+  tasks:
+    - name: Build
+      ansible.builtin.import_role:
+        name: webapp
+        tasks_from: build
+
+- name: deploy
+  hosts: webapp
+  tasks:
+    - name: Deploy
+      ansible.builtin.import_role:
+        name: webapp
+        tasks_from: deploy 

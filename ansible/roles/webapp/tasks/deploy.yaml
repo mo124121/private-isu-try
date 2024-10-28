@@ -1,0 +1,6 @@
+- name: Deploy webapp
+  become: true
+  ansible.builtin.copy:
+    src: ../webapp/golang/app
+    dest: /home/isucon/private_isu/webapplang/go/
+  notify: restart_webapp
