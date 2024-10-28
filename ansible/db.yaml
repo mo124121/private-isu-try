@@ -1,0 +1,6 @@
+- name: Setup db
+  hosts: webapp
+  tasks:
+    - name: Db
+      ansible.builtin.import_role:
+        name: mysql

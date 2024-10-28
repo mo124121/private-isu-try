@@ -1,0 +1,6 @@
+- name: Setup agent
+  hosts: webapp
+  tasks:
+    - name: Agent
+      ansible.builtin.import_role:
+        name: agent

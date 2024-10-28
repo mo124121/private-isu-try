@@ -2,5 +2,8 @@
   become: true
   ansible.builtin.copy:
     src: ../webapp/golang/app
-    dest: /home/isucon/private_isu/webapplang/go/
+    dest: /home/isucon/private_isu/webapp/golang/
+    owner: isucon
+    group: isucon
+    mode: "0755"
   notify: restart_webapp

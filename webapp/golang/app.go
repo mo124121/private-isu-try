@@ -22,6 +22,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
 	"github.com/jmoiron/sqlx"
+	"github.com/kaz/pprotein/integration/standalone"
 )
 
 var (
@@ -262,6 +263,11 @@ func getTemplPath(filename string) string {
 
 func getInitialize(w http.ResponseWriter, r *http.Request) {
 	dbInitialize()
+	go func() {
+		if _, err := http.Get("http://isucon-o11y:9000/api/group/collect"); err != nil {
+			log.Printf("failed to communicate with pprotein: %v", err)
+		}
+	}()
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -849,6 +855,8 @@ func main() {
 	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
 		http.FileServer(http.Dir("../public")).ServeHTTP(w, r)
 	})
+
+	go standalone.Integrate(":19001")
 
 	log.Fatal(http.ListenAndServe(":8080", r))
 }
