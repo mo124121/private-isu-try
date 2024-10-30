@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	crand "crypto/rand"
 	"database/sql"
 	"fmt"
@@ -26,11 +27,17 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/jmoiron/sqlx"
 	"github.com/kaz/pprotein/integration/standalone"
+	"github.com/riandyrn/otelchi"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 var (
-	db        *sqlx.DB
-	store     *gsm.MemcacheStore
+	db     *sqlx.DB
+	store  *gsm.MemcacheStore
+	tracer oteltrace.Tracer
+
 	userCache = sync.Map{}
 	cacheLock = sync.Mutex{}
 )
@@ -898,7 +905,23 @@ func main() {
 	}
 	defer db.Close()
 
+	tp, err := isuutil.InitializeTracerProvider()
+	if err != nil {
+		log.Fatalf("Failed to initialize trace provider: %s.", err.Error())
+	}
+	defer func() {
+		if err := tp.Shutdown(context.Background()); err != nil {
+			log.Printf("Error shutting down tracer provider: %v", err)
+		}
+	}()
+	// set global tracer provider & text propagators
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+	// initialize tracer
+	tracer = otel.Tracer("mux-server")
+
 	r := chi.NewRouter()
+	r.Use(otelchi.Middleware("isu-go", otelchi.WithChiRoutes(r)))
 
 	r.Get("/initialize", getInitialize)
 	r.Get("/login", getLogin)
