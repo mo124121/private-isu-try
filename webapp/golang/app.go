@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -218,7 +219,13 @@ func getFlash(w http.ResponseWriter, r *http.Request, key string) string {
 	}
 }
 
-func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, error) {
+func makePosts(ctx context.Context, results []Post, csrfToken string, allComments bool) ([]Post, error) {
+	pc := make([]uintptr, 1)
+	runtime.Callers(0, pc)
+	function := runtime.FuncForPC(pc[0])
+	ctx, span := otel.GetTracerProvider().Tracer("").Start(ctx, function.Name())
+	defer span.End()
+
 	var posts []Post
 
 	for _, p := range results {
@@ -442,24 +449,34 @@ func getLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func getIndex(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+	defer r.Body.Close()
+
 	me := getSessionUser(r)
 
-	results := []Post{}
+	tx, err := db.BeginTxx(ctx, nil)
+	if err != nil {
+		log.Print(err)
+		return
+	}
 
-	err := db.Select(&results, `
+	results := []Post{}
+	query := `
 	SELECT p.id, p.user_id, p.body, p.mime, p.created_at
 	FROM posts AS p
 	JOIN users AS u ON p.user_id = u.id
 	WHERE u.del_flg = 0
 	ORDER BY p.created_at DESC 
 	LIMIT ?
-    `, postsPerPage)
-	if err != nil {
+    `
+
+	if err := tx.SelectContext(ctx, &results, query, postsPerPage); err != nil {
 		log.Print(err)
 		return
 	}
 
-	posts, err := makePosts(results, getCSRFToken(r), false)
+	posts, err := makePosts(ctx, results, getCSRFToken(r), false)
 	if err != nil {
 		log.Print(err)
 		return
@@ -483,6 +500,8 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func getAccountName(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	defer r.Body.Close()
 	accountName := r.PathValue("accountName")
 	user := User{}
 
@@ -505,7 +524,7 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	posts, err := makePosts(results, getCSRFToken(r), false)
+	posts, err := makePosts(ctx, results, getCSRFToken(r), false)
 	if err != nil {
 		log.Print(err)
 		return
@@ -569,6 +588,9 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 }
 
 func getPosts(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	defer r.Body.Close()
+
 	m, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -600,7 +622,7 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	posts, err := makePosts(results, getCSRFToken(r), false)
+	posts, err := makePosts(ctx, results, getCSRFToken(r), false)
 	if err != nil {
 		log.Print(err)
 		return
@@ -622,6 +644,8 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 }
 
 func getPostsID(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	defer r.Body.Close()
 	pidStr := r.PathValue("id")
 	pid, err := strconv.Atoi(pidStr)
 	if err != nil {
@@ -640,7 +664,7 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	posts, err := makePosts([]Post{post}, getCSRFToken(r), true)
+	posts, err := makePosts(ctx, []Post{post}, getCSRFToken(r), true)
 	if err != nil {
 		log.Print(err)
 		return
@@ -899,7 +923,7 @@ func main() {
 		dbname,
 	)
 
-	db, err = sqlx.Open("mysql", dsn)
+	db, err = isuutil.NewIsuconDBFromDSN(dsn)
 	if err != nil {
 		log.Fatalf("Failed to connect to DB: %s.", err.Error())
 	}

@@ -11,6 +11,7 @@ require (
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/kaz/pprotein v1.2.3
 	github.com/riandyrn/otelchi v0.10.1
+	github.com/uptrace/opentelemetry-go-extra/otelsql v0.3.2
 	go.opentelemetry.io/otel v1.31.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.31.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.31.0
