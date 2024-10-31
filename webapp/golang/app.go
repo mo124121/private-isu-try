@@ -43,6 +43,7 @@ var (
 	commentCountCache = sync.Map{}
 	allCommentCache   = sync.Map{}
 	threeCommentCache = sync.Map{}
+	postModelCache    = sync.Map{}
 	cacheLock         = sync.Mutex{}
 )
 
@@ -390,6 +391,8 @@ func getInitialize(w http.ResponseWriter, r *http.Request) {
 	commentCountCache = sync.Map{}
 	allCommentCache = sync.Map{}
 	threeCommentCache = sync.Map{}
+	postModelCache = sync.Map{}
+
 	cacheLock.Unlock()
 
 	go func() {
@@ -711,6 +714,21 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 	)).Execute(w, posts)
 }
 
+func getPostModel(postID int) (Post, error) {
+	if post, ok := postModelCache.Load(postID); ok {
+		return post.(Post), nil
+	}
+	var post Post
+	err := db.Get(&post, "SELECT * FROM `posts` WHERE `id` = ?", postID)
+	if err != nil {
+		return Post{}, err
+	}
+
+	postModelCache.Store(postID, post)
+
+	return post, nil
+}
+
 func getPostsID(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	defer r.Body.Close()
@@ -721,8 +739,7 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var post Post
-	err = db.Get(&post, "SELECT * FROM `posts` WHERE `id` = ?", pid)
+	post, err := getPostModel(pid)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			w.WriteHeader(http.StatusNotFound)
@@ -896,7 +913,7 @@ func postComment(w http.ResponseWriter, r *http.Request) {
 	commentCountCache.Delete(postID)
 	allCommentCache.Delete(postID)
 	threeCommentCache.Delete(postID)
-
+	postModelCache.Delete(postID)
 	http.Redirect(w, r, fmt.Sprintf("/posts/%d", postID), http.StatusFound)
 }
 
