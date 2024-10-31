@@ -860,8 +860,7 @@ func getImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	post := Post{}
-	err = db.Get(&post, "SELECT * FROM `posts` WHERE `id` = ?", pid)
+	post, err := getPostModel(pid)
 	if err != nil {
 		log.Print(err)
 		return
@@ -913,7 +912,6 @@ func postComment(w http.ResponseWriter, r *http.Request) {
 	commentCountCache.Delete(postID)
 	allCommentCache.Delete(postID)
 	threeCommentCache.Delete(postID)
-	postModelCache.Delete(postID)
 	http.Redirect(w, r, fmt.Sprintf("/posts/%d", postID), http.StatusFound)
 }
 
