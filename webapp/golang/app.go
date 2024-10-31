@@ -114,6 +114,7 @@ func dbInitialize() error {
 		"CREATE INDEX post_id_idx ON comments (post_id);",
 		"CREATE INDEX user_id_idx ON comments (user_id);",
 		"CREATE INDEX iser_id_idx ON posts (user_id);",
+		"CREATE INDEX user_time_idx ON posts (user_id, created_at DESC)",
 		"CREATE INDEX created_at_idx ON posts (created_at DESC);",
 		"CREATE INDEX account_name_idx ON users (account_name);",
 		"CREATE INDEX del_flg_id_idx ON users (del_flg, id);",
