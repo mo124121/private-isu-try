@@ -39,8 +39,9 @@ var (
 	store  *gsm.MemcacheStore
 	tracer oteltrace.Tracer
 
-	userCache = sync.Map{}
-	cacheLock = sync.Mutex{}
+	userCache         = sync.Map{}
+	commentCountCache = sync.Map{}
+	cacheLock         = sync.Mutex{}
 )
 
 const (
@@ -219,6 +220,20 @@ func getFlash(w http.ResponseWriter, r *http.Request, key string) string {
 	}
 }
 
+func getCommentCount(postID int) (int, error) {
+	if count, ok := commentCountCache.Load(postID); ok {
+		return count.(int), nil
+	}
+	var count int
+	err := db.Get(&count, "SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?", postID)
+	if err != nil {
+		return -1, err
+	}
+
+	commentCountCache.Store(postID, count)
+	return count, nil
+}
+
 func makePosts(ctx context.Context, results []Post, csrfToken string, allComments bool) ([]Post, error) {
 	pc := make([]uintptr, 1)
 	runtime.Callers(0, pc)
@@ -229,10 +244,11 @@ func makePosts(ctx context.Context, results []Post, csrfToken string, allComment
 	var posts []Post
 
 	for _, p := range results {
-		err := db.Get(&p.CommentCount, "SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?", p.ID)
+		count, err := getCommentCount(p.ID)
 		if err != nil {
 			return nil, err
 		}
+		p.CommentCount = count
 
 		query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
 		if !allComments {
@@ -322,6 +338,7 @@ func getInitialize(w http.ResponseWriter, r *http.Request) {
 
 	cacheLock.Lock()
 	userCache = sync.Map{}
+	commentCountCache = sync.Map{}
 	cacheLock.Unlock()
 
 	go func() {
@@ -825,6 +842,7 @@ func postComment(w http.ResponseWriter, r *http.Request) {
 		log.Print(err)
 		return
 	}
+	commentCountCache.Delete(postID)
 
 	http.Redirect(w, r, fmt.Sprintf("/posts/%d", postID), http.StatusFound)
 }
