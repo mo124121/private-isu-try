@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	crand "crypto/rand"
+	"crypto/sha512"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"html/template"
 	"io"
@@ -10,9 +13,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,13 +29,23 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/jmoiron/sqlx"
 	"github.com/kaz/pprotein/integration/standalone"
+	"github.com/riandyrn/otelchi"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 var (
-	db        *sqlx.DB
-	store     *gsm.MemcacheStore
-	userCache = sync.Map{}
-	cacheLock = sync.Mutex{}
+	db     *sqlx.DB
+	store  *gsm.MemcacheStore
+	tracer oteltrace.Tracer
+
+	userCache         = sync.Map{}
+	commentCountCache = sync.Map{}
+	allCommentCache   = sync.Map{}
+	threeCommentCache = sync.Map{}
+	postModelCache    = sync.Map{}
+	cacheLock         = sync.Mutex{}
 )
 
 const (
@@ -101,7 +114,7 @@ func dbInitialize() error {
 		"CREATE INDEX created_at_idx ON comments (created_at DESC);",
 		"CREATE INDEX post_id_idx ON comments (post_id);",
 		"CREATE INDEX user_id_idx ON comments (user_id);",
-		"CREATE INDEX iser_id_idx ON posts (user_id);",
+		"CREATE INDEX user_id_idx ON posts (user_id);",
 		"CREATE INDEX created_at_idx ON posts (created_at DESC);",
 		"CREATE INDEX account_name_idx ON users (account_name);",
 		"CREATE INDEX del_flg_id_idx ON users (del_flg, id);",
@@ -141,14 +154,15 @@ func escapeshellarg(arg string) string {
 }
 
 func digest(src string) string {
-	// opensslのバージョンによっては (stdin)= というのがつくので取る
-	out, err := exec.Command("/bin/bash", "-c", `printf "%s" `+escapeshellarg(src)+` | openssl dgst -sha512 | sed 's/^.*= //'`).Output()
-	if err != nil {
-		log.Print(err)
-		return ""
-	}
+	// SHA-512ハッシュの計算
+	hash := sha512.New()
+	hash.Write([]byte(src))
+	hashBytes := hash.Sum(nil)
 
-	return strings.TrimSuffix(string(out), "\n")
+	// ハッシュを16進数表記に変換
+	hashString := hex.EncodeToString(hashBytes)
+
+	return hashString
 }
 
 func calculateSalt(accountName string) string {
@@ -211,35 +225,103 @@ func getFlash(w http.ResponseWriter, r *http.Request, key string) string {
 	}
 }
 
-func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, error) {
+func getCommentCount(postID int) (int, error) {
+	if count, ok := commentCountCache.Load(postID); ok {
+		return count.(int), nil
+	}
+	var count int
+	err := db.Get(&count, "SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?", postID)
+	if err != nil {
+		return -1, err
+	}
+
+	commentCountCache.Store(postID, count)
+	return count, nil
+}
+
+func getAllComments(postID int) ([]Comment, error) {
+	if comments, ok := allCommentCache.Load(postID); ok {
+		return comments.([]Comment), nil
+	}
+
+	query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
+	var comments []Comment
+	err := db.Select(&comments, query, postID)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := 0; i < len(comments); i++ {
+		comments[i].User, err = getUser(comments[i].UserID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// reverse
+	for i, j := 0, len(comments)-1; i < j; i, j = i+1, j-1 {
+		comments[i], comments[j] = comments[j], comments[i]
+	}
+
+	allCommentCache.Store(postID, comments)
+
+	return comments, nil
+
+}
+func getThreeComments(postID int) ([]Comment, error) {
+	if comments, ok := threeCommentCache.Load(postID); ok {
+		return comments.([]Comment), nil
+	}
+
+	query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC LIMIT 3"
+	var comments []Comment
+	err := db.Select(&comments, query, postID)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := 0; i < len(comments); i++ {
+		comments[i].User, err = getUser(comments[i].UserID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// reverse
+	for i, j := 0, len(comments)-1; i < j; i, j = i+1, j-1 {
+		comments[i], comments[j] = comments[j], comments[i]
+	}
+
+	threeCommentCache.Store(postID, comments)
+
+	return comments, nil
+
+}
+
+func makePosts(ctx context.Context, results []Post, csrfToken string, allComments bool) ([]Post, error) {
+	pc := make([]uintptr, 1)
+	runtime.Callers(0, pc)
+	function := runtime.FuncForPC(pc[0])
+	ctx, span := otel.GetTracerProvider().Tracer("").Start(ctx, function.Name())
+	defer span.End()
+
 	var posts []Post
 
 	for _, p := range results {
-		err := db.Get(&p.CommentCount, "SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?", p.ID)
+		count, err := getCommentCount(p.ID)
 		if err != nil {
 			return nil, err
 		}
-
-		query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
-		if !allComments {
-			query += " LIMIT 3"
-		}
+		p.CommentCount = count
 		var comments []Comment
-		err = db.Select(&comments, query, p.ID)
+
+		if !allComments {
+			comments, err = getThreeComments(p.ID)
+		} else {
+			comments, err = getAllComments(p.ID)
+		}
 		if err != nil {
 			return nil, err
-		}
-
-		for i := 0; i < len(comments); i++ {
-			comments[i].User, err = getUser(comments[i].UserID)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		// reverse
-		for i, j := 0, len(comments)-1; i < j; i, j = i+1, j-1 {
-			comments[i], comments[j] = comments[j], comments[i]
 		}
 
 		p.Comments = comments
@@ -308,6 +390,11 @@ func getInitialize(w http.ResponseWriter, r *http.Request) {
 
 	cacheLock.Lock()
 	userCache = sync.Map{}
+	commentCountCache = sync.Map{}
+	allCommentCache = sync.Map{}
+	threeCommentCache = sync.Map{}
+	postModelCache = sync.Map{}
+
 	cacheLock.Unlock()
 
 	go func() {
@@ -435,24 +522,34 @@ func getLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func getIndex(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+	defer r.Body.Close()
+
 	me := getSessionUser(r)
 
-	results := []Post{}
-
-	err := db.Select(&results, `
-	SELECT p.id, p.user_id, p.body, p.mime, p.created_at
-	FROM posts AS p
-	JOIN users AS u ON p.user_id = u.id
-	WHERE u.del_flg = 0
-	ORDER BY p.created_at DESC 
-	LIMIT ?
-    `, postsPerPage)
+	tx, err := db.BeginTxx(ctx, nil)
 	if err != nil {
 		log.Print(err)
 		return
 	}
 
-	posts, err := makePosts(results, getCSRFToken(r), false)
+	results := []Post{}
+	query := `
+	SELECT p.id, p.user_id, p.body, p.mime, p.created_at
+	FROM posts AS p FORCE INDEX (created_at_idx)
+	JOIN users AS u ON p.user_id = u.id
+	WHERE u.del_flg = 0
+	ORDER BY p.created_at DESC 
+	LIMIT ?
+    `
+
+	if err := tx.SelectContext(ctx, &results, query, postsPerPage); err != nil {
+		log.Print(err)
+		return
+	}
+
+	posts, err := makePosts(ctx, results, getCSRFToken(r), false)
 	if err != nil {
 		log.Print(err)
 		return
@@ -476,6 +573,8 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func getAccountName(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	defer r.Body.Close()
 	accountName := r.PathValue("accountName")
 	user := User{}
 
@@ -498,7 +597,7 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	posts, err := makePosts(results, getCSRFToken(r), false)
+	posts, err := makePosts(ctx, results, getCSRFToken(r), false)
 	if err != nil {
 		log.Print(err)
 		return
@@ -562,6 +661,9 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 }
 
 func getPosts(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	defer r.Body.Close()
+
 	m, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -593,7 +695,7 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	posts, err := makePosts(results, getCSRFToken(r), false)
+	posts, err := makePosts(ctx, results, getCSRFToken(r), false)
 	if err != nil {
 		log.Print(err)
 		return
@@ -614,7 +716,24 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 	)).Execute(w, posts)
 }
 
+func getPostModel(postID int) (Post, error) {
+	if post, ok := postModelCache.Load(postID); ok {
+		return post.(Post), nil
+	}
+	var post Post
+	err := db.Get(&post, "SELECT * FROM `posts` WHERE `id` = ?", postID)
+	if err != nil {
+		return Post{}, err
+	}
+
+	postModelCache.Store(postID, post)
+
+	return post, nil
+}
+
 func getPostsID(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	defer r.Body.Close()
 	pidStr := r.PathValue("id")
 	pid, err := strconv.Atoi(pidStr)
 	if err != nil {
@@ -622,8 +741,7 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var post Post
-	err = db.Get(&post, "SELECT * FROM `posts` WHERE `id` = ?", pid)
+	post, err := getPostModel(pid)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			w.WriteHeader(http.StatusNotFound)
@@ -633,7 +751,7 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	posts, err := makePosts([]Post{post}, getCSRFToken(r), true)
+	posts, err := makePosts(ctx, []Post{post}, getCSRFToken(r), true)
 	if err != nil {
 		log.Print(err)
 		return
@@ -794,7 +912,10 @@ func postComment(w http.ResponseWriter, r *http.Request) {
 		log.Print(err)
 		return
 	}
-
+	commentCountCache.Delete(postID)
+	allCommentCache.Delete(postID)
+	threeCommentCache.Delete(postID)
+	postModelCache.Delete(postID)
 	http.Redirect(w, r, fmt.Sprintf("/posts/%d", postID), http.StatusFound)
 }
 
@@ -892,13 +1013,29 @@ func main() {
 		dbname,
 	)
 
-	db, err = sqlx.Open("mysql", dsn)
+	db, err = isuutil.NewIsuconDBFromDSN(dsn)
 	if err != nil {
 		log.Fatalf("Failed to connect to DB: %s.", err.Error())
 	}
 	defer db.Close()
 
+	tp, err := isuutil.InitializeTracerProvider()
+	if err != nil {
+		log.Fatalf("Failed to initialize trace provider: %s.", err.Error())
+	}
+	defer func() {
+		if err := tp.Shutdown(context.Background()); err != nil {
+			log.Printf("Error shutting down tracer provider: %v", err)
+		}
+	}()
+	// set global tracer provider & text propagators
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+	// initialize tracer
+	tracer = otel.Tracer("mux-server")
+
 	r := chi.NewRouter()
+	r.Use(otelchi.Middleware("isu-go", otelchi.WithChiRoutes(r)))
 
 	r.Get("/initialize", getInitialize)
 	r.Get("/login", getLogin)
