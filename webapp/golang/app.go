@@ -41,6 +41,8 @@ var (
 
 	userCache         = sync.Map{}
 	commentCountCache = sync.Map{}
+	allCommentCache   = sync.Map{}
+	threeCommentCache = sync.Map{}
 	cacheLock         = sync.Mutex{}
 )
 
@@ -234,6 +236,65 @@ func getCommentCount(postID int) (int, error) {
 	return count, nil
 }
 
+func getAllComments(postID int) ([]Comment, error) {
+	if comments, ok := allCommentCache.Load(postID); ok {
+		return comments.([]Comment), nil
+	}
+
+	query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
+	var comments []Comment
+	err := db.Select(&comments, query, postID)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := 0; i < len(comments); i++ {
+		comments[i].User, err = getUser(comments[i].UserID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// reverse
+	for i, j := 0, len(comments)-1; i < j; i, j = i+1, j-1 {
+		comments[i], comments[j] = comments[j], comments[i]
+	}
+
+	allCommentCache.Store(postID, comments)
+
+	return comments, nil
+
+}
+func getThreeComments(postID int) ([]Comment, error) {
+	if comments, ok := threeCommentCache.Load(postID); ok {
+		return comments.([]Comment), nil
+	}
+
+	query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC LIMIT 3"
+	var comments []Comment
+	err := db.Select(&comments, query, postID)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := 0; i < len(comments); i++ {
+		comments[i].User, err = getUser(comments[i].UserID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// reverse
+	for i, j := 0, len(comments)-1; i < j; i, j = i+1, j-1 {
+		comments[i], comments[j] = comments[j], comments[i]
+	}
+
+	threeCommentCache.Store(postID, comments)
+
+	return comments, nil
+
+}
+
 func makePosts(ctx context.Context, results []Post, csrfToken string, allComments bool) ([]Post, error) {
 	pc := make([]uintptr, 1)
 	runtime.Callers(0, pc)
@@ -249,27 +310,15 @@ func makePosts(ctx context.Context, results []Post, csrfToken string, allComment
 			return nil, err
 		}
 		p.CommentCount = count
-
-		query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
-		if !allComments {
-			query += " LIMIT 3"
-		}
 		var comments []Comment
-		err = db.Select(&comments, query, p.ID)
+
+		if !allComments {
+			comments, err = getThreeComments(p.ID)
+		} else {
+			comments, err = getAllComments(p.ID)
+		}
 		if err != nil {
 			return nil, err
-		}
-
-		for i := 0; i < len(comments); i++ {
-			comments[i].User, err = getUser(comments[i].UserID)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		// reverse
-		for i, j := 0, len(comments)-1; i < j; i, j = i+1, j-1 {
-			comments[i], comments[j] = comments[j], comments[i]
 		}
 
 		p.Comments = comments
@@ -339,6 +388,8 @@ func getInitialize(w http.ResponseWriter, r *http.Request) {
 	cacheLock.Lock()
 	userCache = sync.Map{}
 	commentCountCache = sync.Map{}
+	allCommentCache = sync.Map{}
+	threeCommentCache = sync.Map{}
 	cacheLock.Unlock()
 
 	go func() {
@@ -843,6 +894,8 @@ func postComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	commentCountCache.Delete(postID)
+	allCommentCache.Delete(postID)
+	threeCommentCache.Delete(postID)
 
 	http.Redirect(w, r, fmt.Sprintf("/posts/%d", postID), http.StatusFound)
 }
