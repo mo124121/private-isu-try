@@ -113,8 +113,7 @@ func dbInitialize() error {
 		"CREATE INDEX created_at_idx ON comments (created_at DESC);",
 		"CREATE INDEX post_id_idx ON comments (post_id);",
 		"CREATE INDEX user_id_idx ON comments (user_id);",
-		"CREATE INDEX iser_id_idx ON posts (user_id);",
-		"CREATE INDEX user_time_idx ON posts (user_id, created_at DESC)",
+		"CREATE INDEX user_id_idx ON posts (user_id);",
 		"CREATE INDEX created_at_idx ON posts (created_at DESC);",
 		"CREATE INDEX account_name_idx ON users (account_name);",
 		"CREATE INDEX del_flg_id_idx ON users (del_flg, id);",
@@ -536,7 +535,7 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 	results := []Post{}
 	query := `
 	SELECT p.id, p.user_id, p.body, p.mime, p.created_at
-	FROM posts AS p
+	FROM posts AS p FORCE INDEX (created_at_idx)
 	JOIN users AS u ON p.user_id = u.id
 	WHERE u.del_flg = 0
 	ORDER BY p.created_at DESC 
